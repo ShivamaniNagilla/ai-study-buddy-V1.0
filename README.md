@@ -1,1 +1,0 @@
-# ai-study-buddy-V1.0
