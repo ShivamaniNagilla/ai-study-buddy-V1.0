@@ -12,7 +12,8 @@ from google.genai import types
 from gtts import gTTS
 from pypdf import PdfReader
 
-MODEL = "gemini-2.5-flash"  # Change this if Google releases a newer model
+MODEL = "gemini-3.8-flash"
+FALLBACK_MODELS = ("gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash")
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
 UPLOAD_DIR = DATA_DIR / "uploads"
@@ -45,16 +46,23 @@ def get_client():
 
 def _call_model(contents, config=None):
     """Calls Gemini. If the cached client was closed, rebuilds it and retries once."""
-    for attempt in range(2):
-        try:
-            return get_client().models.generate_content(
-                model=MODEL, contents=contents, config=config
-            )
-        except Exception as e:
-            if attempt == 0 and "closed" in str(e).lower():
-                _make_client.clear()  # throw away the broken client
-                continue
-            raise
+    last_error = None
+    for model in (MODEL,) + FALLBACK_MODELS:
+        for attempt in range(2):
+            try:
+                return get_client().models.generate_content(
+                    model=model, contents=contents, config=config
+                )
+            except Exception as e:
+                last_error = e
+                error_text = str(e).lower()
+                if "closed" in error_text and attempt == 0:
+                    _make_client.clear()
+                    continue
+                if "404" in error_text or "not_found" in error_text or "503" in error_text or "unavailable" in error_text:
+                    break
+                raise
+    raise last_error
 
 
 def ask_gemini(prompt, json_mode=False):
