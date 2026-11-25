@@ -21,7 +21,7 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ---------------- Gemini ----------------
-def get_client():
+def get_api_key():
     key = None
     try:
         key = st.secrets["GEMINI_API_KEY"]
@@ -30,16 +30,38 @@ def get_client():
     if not key:
         st.error("GEMINI_API_KEY is missing. Add it to .streamlit/secrets.toml")
         st.stop()
-    return genai.Client(api_key=key)
+    return key
+
+
+@st.cache_resource(show_spinner=False)
+def _make_client(api_key):
+    # Created once and reused across reruns, so it isn't garbage-collected mid-use
+    return genai.Client(api_key=api_key)
+
+
+def get_client():
+    return _make_client(get_api_key())
+
+
+def _call_model(contents, config=None):
+    """Calls Gemini. If the cached client was closed, rebuilds it and retries once."""
+    for attempt in range(2):
+        try:
+            return get_client().models.generate_content(
+                model=MODEL, contents=contents, config=config
+            )
+        except Exception as e:
+            if attempt == 0 and "closed" in str(e).lower():
+                _make_client.clear()  # throw away the broken client
+                continue
+            raise
 
 
 def ask_gemini(prompt, json_mode=False):
     config = None
     if json_mode:
         config = types.GenerateContentConfig(response_mime_type="application/json")
-    response = get_client().models.generate_content(
-        model=MODEL, contents=prompt, config=config
-    )
+    response = _call_model(prompt, config=config)
     return response.text or ""
 
 
@@ -72,13 +94,10 @@ def generate_revision_pack(notes):
 
 
 def transcribe_audio(audio_bytes, mime_type="audio/wav"):
-    response = get_client().models.generate_content(
-        model=MODEL,
-        contents=[
-            types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
-            "Transcribe this audio exactly as spoken. Return only the transcript.",
-        ],
-    )
+    response = _call_model([
+        types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
+        "Transcribe this audio exactly as spoken. Return only the transcript.",
+    ])
     return (response.text or "").strip()
 
 
